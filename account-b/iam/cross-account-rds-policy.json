@@ -1,0 +1,29 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "rds:DescribeDBInstances",
+        "rds:DescribeDBClusters",
+        "rds:DescribeDBSubnetGroups",
+        "rds:DescribeDBSecurityGroups"
+      ],
+      "Resource": [
+        "arn:aws:rds:*:ACCOUNT_B_ID:db:*",
+        "arn:aws:rds:*:ACCOUNT_B_ID:cluster:*",
+        "arn:aws:rds:*:ACCOUNT_B_ID:subgrp:*",
+        "arn:aws:rds:*:ACCOUNT_B_ID:secgrp:*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeVpcs"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

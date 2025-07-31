@@ -1,0 +1,29 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Security Group for Lambda function with cross-account RDS access
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID where Lambda will be deployed
+
+Resources:
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: lambda-rds-cross-account-sg
+      GroupDescription: Security group for Lambda accessing cross-account RDS
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: 10.1.0.0/16  # Account B VPC CIDR
+          Description: Allow PostgreSQL to Account B RDS
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTPS for AWS API calls
+      Tags:
+        - Key: Name
+          Value: lambda-rds-cross-account-sg

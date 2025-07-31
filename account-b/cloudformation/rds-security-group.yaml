@@ -1,0 +1,24 @@
+# This file is deprecated - see terraform/rds-security-group.tf
+Description: Security Group for RDS with cross-account Lambda access
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID where RDS is deployed
+
+Resources:
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: rds-cross-account-access-sg
+      GroupDescription: Security group for RDS allowing cross-account Lambda access
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: 10.0.0.0/16  # Account A VPC CIDR
+          Description: Allow PostgreSQL from Account A Lambda
+      Tags:
+        - Key: Name
+          Value: rds-cross-account-access-sg
