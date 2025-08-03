@@ -1,0 +1,215 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Complete VPC Peering configuration between Account A and Account B'
+
+Parameters:
+  AccountAVpcId:
+    Type: String
+    Description: VPC ID in Account A (Lambda account)
+    AllowedPattern: '^vpc-[a-zA-Z0-9]+$'
+    ConstraintDescription: Must be a valid VPC ID
+
+  AccountBVpcId:
+    Type: String
+    Description: VPC ID in Account B (RDS account)
+    AllowedPattern: '^vpc-[a-zA-Z0-9]+$'
+    ConstraintDescription: Must be a valid VPC ID
+
+  AccountBId:
+    Type: String
+    Description: AWS Account ID for Account B
+    AllowedPattern: '^[0-9]{12}$'
+    ConstraintDescription: Must be a valid 12-digit AWS Account ID
+
+  AccountAVpcCidr:
+    Type: String
+    Description: CIDR block for Account A VPC
+    Default: '10.0.0.0/16'
+    AllowedPattern: '^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$'
+
+  AccountBVpcCidr:
+    Type: String
+    Description: CIDR block for Account B VPC
+    Default: '10.1.0.0/16'
+    AllowedPattern: '^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$'
+
+  AccountARouteTableIds:
+    Type: CommaDelimitedList
+    Description: Route table IDs in Account A to update
+    MinLength: 1
+
+  Environment:
+    Type: String
+    Description: Environment name
+    Default: production
+    AllowedValues:
+      - development
+      - staging
+      - production
+
+  ProjectName:
+    Type: String
+    Description: Name of the project
+    Default: cross-account-rds
+
+Resources:
+  # VPC Peering Connection (initiated from Account A)
+  VPCPeeringConnection:
+    Type: AWS::EC2::VPCPeeringConnection
+    Properties:
+      VpcId: !Ref AccountAVpcId
+      PeerVpcId: !Ref AccountBVpcId
+      PeerOwnerId: !Ref AccountBId
+      PeerRegion: !Ref AWS::Region
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-peering'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Purpose
+          Value: 'Cross-account Lambda to RDS connectivity'
+
+  # Routes from Account A to Account B
+  AccountARoutes:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt RouteCreationFunction.Arn
+      RouteTableIds: !Ref AccountARouteTableIds
+      DestinationCidrBlock: !Ref AccountBVpcCidr
+      VpcPeeringConnectionId: !Ref VPCPeeringConnection
+      Action: 'CREATE'
+
+  # Lambda function to create routes (since CloudFormation doesn't support multiple routes easily)
+  RouteCreationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-route-creator'
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt RouteCreationRole.Arn
+      Timeout: 60
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import cfnresponse
+          
+          def lambda_handler(event, context):
+              try:
+                  ec2 = boto3.client('ec2')
+                  
+                  route_table_ids = event['ResourceProperties']['RouteTableIds']
+                  destination_cidr = event['ResourceProperties']['DestinationCidrBlock']
+                  peering_connection_id = event['ResourceProperties']['VpcPeeringConnectionId']
+                  action = event['ResourceProperties']['Action']
+                  
+                  if event['RequestType'] == 'Create':
+                      for route_table_id in route_table_ids:
+                          try:
+                              ec2.create_route(
+                                  RouteTableId=route_table_id,
+                                  DestinationCidrBlock=destination_cidr,
+                                  VpcPeeringConnectionId=peering_connection_id
+                              )
+                              print(f"Created route in table {route_table_id}")
+                          except Exception as e:
+                              print(f"Error creating route in table {route_table_id}: {str(e)}")
+                              
+                  elif event['RequestType'] == 'Delete':
+                      for route_table_id in route_table_ids:
+                          try:
+                              ec2.delete_route(
+                                  RouteTableId=route_table_id,
+                                  DestinationCidrBlock=destination_cidr
+                              )
+                              print(f"Deleted route from table {route_table_id}")
+                          except Exception as e:
+                              print(f"Error deleting route from table {route_table_id}: {str(e)}")
+                  
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {})
+
+  RouteCreationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-route-creator-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: RouteManagement
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:CreateRoute
+                  - ec2:DeleteRoute
+                  - ec2:DescribeRouteTables
+                  - ec2:DescribeVpcPeeringConnections
+                Resource: '*'
+
+  # CloudWatch alarm for peering connection monitoring
+  PeeringConnectionAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${Environment}-peering-connection-state'
+      AlarmDescription: 'Monitor VPC Peering Connection state'
+      MetricName: 'PeeringConnectionState'
+      Namespace: 'AWS/VPC'
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: VpcPeeringConnectionId
+          Value: !Ref VPCPeeringConnection
+      AlarmActions:
+        - !Ref PeeringConnectionTopic
+
+  # SNS Topic for peering connection alerts
+  PeeringConnectionTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${ProjectName}-${Environment}-peering-alerts'
+      DisplayName: 'VPC Peering Connection Alerts'
+
+Outputs:
+  VPCPeeringConnectionId:
+    Description: 'ID of the VPC Peering Connection'
+    Value: !Ref VPCPeeringConnection
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-peering-connection-id'
+
+  PeeringConnectionState:
+    Description: 'State of the VPC Peering Connection'
+    Value: !GetAtt VPCPeeringConnection.Status
+
+  SNSTopicArn:
+    Description: 'ARN of the SNS topic for peering alerts'
+    Value: !Ref PeeringConnectionTopic
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-peering-topic-arn'
+
+  RouteCreationFunctionArn:
+    Description: 'ARN of the route creation Lambda function'
+    Value: !GetAtt RouteCreationFunction.Arn
+
+  PeeringConnectionDetails:
+    Description: 'Summary of peering connection configuration'
+    Value: !Sub |
+      Peering Connection: ${VPCPeeringConnection}
+      Account A VPC: ${AccountAVpcId} (${AccountAVpcCidr})
+      Account B VPC: ${AccountBVpcId} (${AccountBVpcCidr})
+      Status: Active

@@ -1,0 +1,12 @@
+{
+  "Variables": {
+    "ACCOUNT_B_ID": "222222222222",
+    "AWS_REGION": "us-east-1",
+    "CROSS_ACCOUNT_ROLE_NAME": "CrossAccountRDSAccessRole",
+    "EXTERNAL_ID": "unique-external-id-12345",
+    "S3_BUCKET_NAME": "my-data-extraction-bucket",
+    "S3_KEY_PREFIX": "extracts/daily",
+    "CSV_FILENAME_PREFIX": "rds_data_extract",
+    "DB_QUERY": "SELECT table_name, table_schema, table_type FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name"
+  }
+}

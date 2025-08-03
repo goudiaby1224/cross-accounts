@@ -1,0 +1,152 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'S3 bucket for Lambda data extraction output'
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: Name of the S3 bucket for data extraction
+    Default: 'rds-data-extraction-bucket'
+    AllowedPattern: '^[a-z0-9][a-z0-9-]*[a-z0-9]$'
+    ConstraintDescription: 'Bucket name must be lowercase and contain only letters, numbers, and hyphens'
+
+  Environment:
+    Type: String
+    Description: Environment name
+    Default: 'production'
+    AllowedValues:
+      - development
+      - staging
+      - production
+
+  ProjectName:
+    Type: String
+    Description: Name of the project
+    Default: 'cross-account-rds'
+
+Resources:
+  DataExtractionBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${BucketName}-${AWS::AccountId}-${AWS::Region}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 30
+          - Id: ArchiveOldData
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 30
+                StorageClass: STANDARD_IA
+              - TransitionInDays: 90
+                StorageClass: GLACIER
+              - TransitionInDays: 365
+                StorageClass: DEEP_ARCHIVE
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      NotificationConfiguration:
+        CloudWatchConfigurations:
+          - Event: 's3:ObjectCreated:*'
+            CloudWatchConfiguration:
+              LogGroupName: !Ref S3LogGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-data-extraction'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Purpose
+          Value: 'Lambda data extraction output'
+
+  DataExtractionBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DataExtractionBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureConnections
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !Sub '${DataExtractionBucket}/*'
+              - !Ref DataExtractionBucket
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'false'
+          - Sid: AllowLambdaAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LambdaExecutionRole'
+            Action:
+              - 's3:PutObject'
+              - 's3:PutObjectAcl'
+              - 's3:GetObject'
+              - 's3:DeleteObject'
+            Resource: !Sub '${DataExtractionBucket}/*'
+          - Sid: AllowLambdaBucketAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LambdaExecutionRole'
+            Action:
+              - 's3:ListBucket'
+              - 's3:GetBucketLocation'
+            Resource: !Ref DataExtractionBucket
+
+  S3LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/s3/${ProjectName}-${Environment}-data-extraction'
+      RetentionInDays: 30
+
+  # CloudWatch alarm for monitoring bucket activity
+  DataExtractionAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${Environment}-s3-activity'
+      AlarmDescription: 'Monitor S3 bucket for data extraction activity'
+      MetricName: 'NumberOfObjects'
+      Namespace: 'AWS/S3'
+      Statistic: 'Average'
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 1000
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: BucketName
+          Value: !Ref DataExtractionBucket
+        - Name: StorageType
+          Value: 'AllStorageTypes'
+
+Outputs:
+  BucketName:
+    Description: 'Name of the S3 bucket for data extraction'
+    Value: !Ref DataExtractionBucket
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-data-extraction-bucket'
+
+  BucketArn:
+    Description: 'ARN of the S3 bucket'
+    Value: !GetAtt DataExtractionBucket.Arn
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-data-extraction-bucket-arn'
+
+  BucketDomainName:
+    Description: 'Domain name of the S3 bucket'
+    Value: !GetAtt DataExtractionBucket.DomainName
+
+  BucketRegionalDomainName:
+    Description: 'Regional domain name of the S3 bucket'
+    Value: !GetAtt DataExtractionBucket.RegionalDomainName
